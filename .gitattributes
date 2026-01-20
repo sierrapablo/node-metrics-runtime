@@ -1,0 +1,4 @@
+Jenkinsfile linguist-language=Groovy
+Jenkinsfile.* linguist-language=Groovy
+*.Jenkinsfile linguist-language=Groovy
+ci/Jenkinsfile* linguist-language=Groovy
