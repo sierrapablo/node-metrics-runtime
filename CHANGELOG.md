@@ -17,7 +17,7 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
--
+- Used node version: from 20 to 24
 
 ### Fixed
 
