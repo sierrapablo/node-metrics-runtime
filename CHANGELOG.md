@@ -10,6 +10,10 @@ and this project adheres to Semantic Versioning.
 ### Added
 
 - Initial project scaffold.
+- Basic prometheus metrics endpoint
+- Initial Jenkinsfiles
+- Initial build and test scripts
+- Docs, READMES, LICENSE, CHANGELOG, VERSION file
 
 ### Changed
 
