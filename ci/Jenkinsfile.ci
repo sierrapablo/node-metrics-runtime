@@ -1,0 +1,17 @@
+pipeline {
+  agent any
+
+  stages {
+    stage('Build (local)') {
+      steps {
+        sh './scripts/build-local.sh node-metrics-runtime dev'
+      }
+    }
+
+    stage('Smoke test') {
+      steps {
+        sh './scripts/smoke-test.sh node-metrics-runtime:dev'
+      }
+    }
+  }
+}

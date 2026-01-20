@@ -1,0 +1,178 @@
+import java.util.regex.Pattern
+
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+  }
+
+  parameters {
+    choice(name: 'BUMP', choices: ['MAJOR', 'MINOR', 'PATCH'], description: 'SemVer bump')
+  }
+
+  environment {
+    GIT_USER_NAME  = 'Jenkins CI'
+    GIT_USER_EMAIL = 'jenkins[bot]@noreply.jenkins.io'
+    VERSION_FILE   = 'VERSION.md'
+    CHANGELOG_FILE = 'CHANGELOG.md'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh 'git fetch --tags --force'
+      }
+    }
+
+    stage('Read current version') {
+      steps {
+        script {
+          def raw = sh(
+            script: "head -n 1 ${env.VERSION_FILE} | tr -d ' \\r\\n'",
+            returnStdout: true
+          ).trim()
+
+          if (!(raw ==~ /\\d+\\.\\d+\\.\\d+/)) {
+            error("${env.VERSION_FILE} must contain a single SemVer X.Y.Z line. Got: '${raw}'")
+          }
+
+          env.CURRENT_VERSION = raw
+          echo "Current version: ${env.CURRENT_VERSION}"
+        }
+      }
+    }
+
+    stage('Compute next version') {
+      steps {
+        script {
+          def parts = env.CURRENT_VERSION.tokenize('.')
+          int major = parts[0].toInteger()
+          int minor = parts[1].toInteger()
+          int patch = parts[2].toInteger()
+
+          if (params.BUMP == 'MAJOR') { major += 1; minor = 0; patch = 0 }
+          if (params.BUMP == 'MINOR') { minor += 1; patch = 0 }
+          if (params.BUMP == 'PATCH') { patch += 1 }
+
+          env.NEW_VERSION = "${major}.${minor}.${patch}"
+          env.NEW_TAG = env.NEW_VERSION
+
+          env.RELEASE_DATE = sh(script: "date +%F", returnStdout: true).trim()
+
+          echo "New version: ${env.NEW_VERSION} (tag: ${env.NEW_TAG})"
+        }
+      }
+    }
+
+    stage('Update VERSION.md + CHANGELOG.md from Unreleased') {
+      steps {
+        script {
+          writeFile file: env.VERSION_FILE, text: "${env.NEW_VERSION}\n"
+
+          def ch = readFile(env.CHANGELOG_FILE)
+
+          def pattern = Pattern.compile(
+            "(?s)^(.*?^## \\[Unreleased\\]\\s*\\R)(.*?)(^## \\[.*\\].*\\R.*|\\z)"
+          )
+          def m = pattern.matcher(ch)
+          if (!m.find()) {
+            error("CHANGELOG.md must contain a '## [Unreleased]' section")
+          }
+
+          def headerPlusUnreleasedTitle = m.group(1)
+          def unreleasedBody = m.group(2)
+          def tail = m.group(3)
+
+          def unreleasedTrim = unreleasedBody.trim()
+
+          if (!unreleasedTrim) {
+            error("CHANGELOG.md [Unreleased] is empty. Add entries to Unreleased before releasing.")
+          }
+
+          def newSection =
+            "## [${env.NEW_VERSION}] - ${env.RELEASE_DATE}\n" +
+            "${unreleasedTrim}\n\n"
+
+          def unreleasedReset =
+            "### Added\n" +
+            "- \n\n" +
+            "### Changed\n" +
+            "- \n\n" +
+            "### Fixed\n" +
+            "- \n\n"
+
+          def updated =
+            headerPlusUnreleasedTitle +
+            unreleasedReset +
+            "\n" +
+            newSection +
+            (tail ?: "")
+
+          writeFile file: env.CHANGELOG_FILE, text: updated
+        }
+      }
+    }
+
+    stage('Commit & tag') {
+      steps {
+        sshagent(credentials: ['github']) {
+          sh '''
+            set -euo pipefail
+
+            git config user.name "${GIT_USER_NAME}"
+            git config user.email "${GIT_USER_EMAIL}"
+
+            git add "${VERSION_FILE}" "${CHANGELOG_FILE}"
+            git commit -m "chore(release): ${NEW_VERSION}"
+
+            # push commit
+            git push origin HEAD
+
+            # tag (no 'v' prefix)
+            git tag -a "${NEW_TAG}" -m "Release ${NEW_TAG}"
+            git push origin "${NEW_TAG}"
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo """
+        ==========================================
+        RELEASE SUCCESSFUL
+        ==========================================
+        Version: ${env.NEW_VERSION}
+        Tag:     ${env.NEW_TAG}
+        Date:    ${env.RELEASE_DATE}
+        Duration: ${currentBuild.durationString}
+        ==========================================
+      """
+    }
+    failure {
+      echo """
+        ==========================================
+        RELEASE FAILED
+        ==========================================
+        Version: ${env.NEW_VERSION}
+        Duration: ${currentBuild.durationString}
+        ==========================================
+      """
+    }
+    always {
+      script {
+        echo "Attempting to clean up remote branch release/${env.NEW_VERSION}..."
+        sshagent(credentials: ['github']) {
+          sh 'git checkout develop'
+          sh 'git fetch origin'
+          sh "git branch -D release/${env.NEW_VERSION} || true"
+          sh "git push origin --delete release/${env.NEW_VERSION} || true"
+        }
+      }
+    }
+  }
+}
